@@ -46,7 +46,7 @@ void Encoder2_Init(void)
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_TIM1, ENABLE);
 	RCC_APB2PeriphClockCmd(RCC_APB2Periph_GPIOA, ENABLE);
 	
-    //TIM1µÄCH1ºÍCH2
+    //TIM1ï¿½ï¿½CH1ï¿½ï¿½CH2
 	GPIO_InitTypeDef GPIO_InitStructure;
 	GPIO_InitStructure.GPIO_Mode = GPIO_Mode_IPU;
 	GPIO_InitStructure.GPIO_Pin = GPIO_Pin_8 | GPIO_Pin_9;
@@ -91,31 +91,5 @@ int16_t GetSpeed2(void)
 	cnt++;
 	Temp = TIM_GetCounter(TIM1);
 	if(cnt%2==0)  TIM_SetCounter(TIM1, 0);
-	return Temp;
-}
-
-int16_t my_distance1(){
-	int16_t Temp;
-	Temp = TIM_GetCounter(TIM3);
-//		TIM_SetCounter(TIM3,0);
-	return Temp;
-}
-int16_t	 my_distance2(){
-	int16_t Temp;
-	Temp = TIM_GetCounter(TIM1);
-//		TIM_SetCounter(TIM1,0);
-	return Temp;
-}
-
-int16_t my_GetSpeed1(){
-	int16_t Temp;
-	Temp = TIM_GetCounter(TIM3);
-		TIM_SetCounter(TIM3,0);
-	return Temp;
-}
-int16_t	 my_GetSpeed2(){
-	int16_t Temp;
-	Temp = TIM_GetCounter(TIM1);
-		TIM_SetCounter(TIM1,0);
 	return Temp;
 }

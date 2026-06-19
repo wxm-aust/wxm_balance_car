@@ -1,65 +1,137 @@
-#include "stm32f10x.h"                  // Device header
+#include "stm32f10x.h"
 #include "PID.h"
-#include "OLED.h"
+#include <math.h>
 
-//Ö±Á¢»·
-//µ÷ÓÃ£ºVertical(0,Angle,gyro_X)
 extern uint8_t RxData;
-extern float Pitch,Roll,Yaw,Balance_Kp,Balance_Kd,Velocity_Kp,Velocity_Ki,Turn_Kp,Turn_Kd;
+extern Attitude_t attitude;
 
-int Balance(float Angle,float Gyro)
-{  
-   float Angle_bias,Gyro_bias;
-	 int balance;
-	 Angle_bias=Middle_angle-Angle;                       				//Çó³öÆ½ºâµÄ½Ç¶ÈÖÐÖµ ºÍ»úÐµÏà¹Ø
-	 Gyro_bias=0-Gyro; 
-	 balance=-Balance_Kp/100*Angle_bias-Gyro_bias*Balance_Kd/100; //¼ÆËãÆ½ºâ¿ØÖÆµÄµç»úPWM  PD¿ØÖÆ   kpÊÇPÏµÊý kdÊÇDÏµÊý 
-	 return balance;
+void PID_Init(PID_Controller_t *pid, float kp, float ki, float kd, float max, float min)
+{
+    pid->Kp = kp;
+    pid->Ki = ki;
+    pid->Kd = kd;
+    pid->error = 0;
+    pid->last_error = 0;
+    pid->integral = 0;
+    pid->output = 0;
+    pid->output_max = max;
+    pid->output_min = min;
 }
 
-int Velocity(int encoder_left,int encoder_right)
-{  
-	  static float velocity,Encoder_Least,Encoder_bias,Movement;
-	  static float Encoder_Integral,Target_Velocity;
+float PID_Compute(PID_Controller_t *pid, float setpoint, float measurement)
+{
+    pid->error = setpoint - measurement;
+    pid->integral += pid->error;
+    /* ç§¯åˆ†é™å¹… */
+    if (pid->integral > INTEGRAL_MAX) pid->integral = INTEGRAL_MAX;
+    if (pid->integral < -INTEGRAL_MAX) pid->integral = -INTEGRAL_MAX;
+    /* PID è¾“å‡ºï¼ˆÃ—100 çº¦å®šï¼‰ */
+    pid->output = pid->Kp / 100.0f * pid->error
+                + pid->Ki / 100.0f * pid->integral
+                + pid->Kd / 100.0f * (pid->error - pid->last_error);
+    pid->last_error = pid->error;
+    /* è¾“å‡ºé™å¹… */
+    if (pid->output > pid->output_max) pid->output = pid->output_max;
+    if (pid->output < pid->output_min) pid->output = pid->output_min;
+    return pid->output;
+}
 
-	  //================Ò£¿ØÇ°½øºóÍË²¿·Ö====================// 
-		Target_Velocity = 500;
-		if(RxData == 'A')    	Movement=Target_Velocity;	  //ÊÕµ½Ç°½øÐÅºÅ
-		else if(RxData == 'E')	Movement=-Target_Velocity;  //ÊÕµ½ºóÍËÐÅºÅ
-		else  Movement=0;	
-		//if(RxData=='A'||RxData == 'E') Velocity_Kp=0;
-   //=============ËÙ¶ÈPI¿ØÖÆÆ÷=======================//	
-		Encoder_Least =(encoder_left+encoder_right)-0;                    //»ñÈ¡×îÐÂËÙ¶ÈÆ«²î=Ä¿±êËÙ¶È£¨´Ë´¦ÎªÁã£©-²âÁ¿ËÙ¶È£¨×óÓÒ±àÂëÆ÷Ö®ºÍ£© 
-		Encoder_bias *= 0.7;		                                          //Ò»½×µÍÍ¨ÂË²¨Æ÷       
-		Encoder_bias += Encoder_Least*0.3;	                              //Ò»½×µÍÍ¨ÂË²¨Æ÷£¬¼õ»ºËÙ¶È±ä»¯ 
-		Encoder_Integral +=Encoder_bias;                                  //»ý·Ö³öÎ»ÒÆ »ý·ÖÊ±¼ä£º10ms
-		Encoder_Integral=Encoder_Integral+Movement;                       //½ÓÊÕÒ£¿ØÆ÷Êý¾Ý£¬¿ØÖÆÇ°½øºóÍË
-		if(Encoder_Integral>10000)  	Encoder_Integral=10000;             //»ý·ÖÏÞ·ù
-		if(Encoder_Integral<-10000)	  Encoder_Integral=-10000;            //»ý·ÖÏÞ·ù	
-		velocity=-Encoder_bias*Velocity_Kp/100-Encoder_Integral*Velocity_Ki/100;     //ËÙ¶È¿ØÖÆ	
-		return velocity;
+int Balance(float Angle, float Gyro)
+{
+    static PID_Controller_t outer_pid, inner_pid;
+    static uint8_t inited = 0;
+    if (!inited) {
+        PID_Init(&outer_pid, BALANCE_OUTER_KP, 0, 0, 0, 0);  /* å¤–çŽ¯çº¯ Pï¼Œä¸é™åˆ¶è¾“å‡º */
+        PID_Init(&inner_pid, BALANCE_INNER_KP, BALANCE_INNER_KI, BALANCE_INNER_KD, PWM_MAX, -PWM_MAX);
+        inited = 1;
+    }
+    /* å¤–çŽ¯ï¼šè§’åº¦åå·® â†’ ç›®æ ‡è§’é€Ÿåº¦ */
+    /* ä¿æŒåŽŸç¬¦å·çº¦å®šï¼štarget_rate = -Kp_outer/100 * (MIDDLE_ANGLE - Angle) */
+    float target_rate = -outer_pid.Kp / 100.0f * (MIDDLE_ANGLE - Angle);
+    /* å†…çŽ¯ï¼šè§’é€Ÿåº¦åå·® â†’ PWMã€‚ä½¿ç”¨ -Gyro ä½œä¸ºæµ‹é‡å€¼ä»¥åŒ¹é…åŽŸ D é¡¹ç¬¦å· (+Kd*Gyro) */
+    float pwm = PID_Compute(&inner_pid, target_rate, -Gyro);
+    return (int)pwm;
+}
+
+int Velocity(int encoder_left, int encoder_right)
+{
+    static float velocity, Encoder_Least, Encoder_bias, Movement;
+    static float Encoder_Integral;
+    float Ki_factor;
+
+    /* é¥æŽ§å‰å‘/åŽå‘ */
+    if (RxData == CMD_FORWARD) Movement = TARGET_VELOCITY;
+    else if (RxData == CMD_BACKWARD) Movement = -TARGET_VELOCITY;
+    else Movement = 0;
+
+    /* é€Ÿåº¦è®¡ç®— + ä¸€é˜¶ä½Žé€šæ»¤æ³¢ */
+    Encoder_Least = (encoder_left + encoder_right) - 0;
+    Encoder_bias *= 0.7f;
+    Encoder_bias += Encoder_Least * 0.3f;
+
+    /* ç§¯åˆ†åˆ†ç¦»ï¼šç›´ç«‹çŽ¯æœªæ”¶æ•›æ—¶æ¸…é›¶ç§¯åˆ† */
+    if (fabsf(attitude.Pitch) > BALANCE_CONVERGE_THRESHOLD) {
+        Encoder_Integral = 0;
+    } else {
+        /* å˜é€Ÿç§¯åˆ†ï¼šåå·®å¤§æ—¶å‡å¼±ç§¯åˆ† */
+        if (fabsf(Encoder_bias) > VELOCITY_INTEGRAL_THRESHOLD) {
+            Ki_factor = 0;
+        } else {
+            Ki_factor = 1.0f - fabsf(Encoder_bias) / VELOCITY_INTEGRAL_THRESHOLD;
+        }
+        Encoder_Integral += Encoder_bias * Ki_factor;
+        Encoder_Integral += Movement;
+    }
+
+    /* ç§¯åˆ†é™å¹… */
+    if (Encoder_Integral > INTEGRAL_MAX) Encoder_Integral = INTEGRAL_MAX;
+    if (Encoder_Integral < -INTEGRAL_MAX) Encoder_Integral = -INTEGRAL_MAX;
+
+    velocity = -Encoder_bias * VELOCITY_KP / 100.0f - Encoder_Integral * VELOCITY_KI / 100.0f;
+    return (int)velocity;
 }
 
 int Turn(float gyro)
 {
-	 static float Turn_Target,turn,Turn_Amplitude=54;
-	 float Kp=Turn_Kp,Kd;			//ÐÞ¸Ä×ªÏòËÙ¶È£¬ÇëÐÞ¸ÄTurn_Amplitude¼´¿É
-	//===================Ò£¿Ø×óÓÒÐý×ª²¿·Ö=================//
-	 if(RxData == 'C')	        Turn_Target=-Turn_Amplitude;
-	 else if(RxData == 'G')	  Turn_Target=Turn_Amplitude; 
-	 else Turn_Target=0;
-	 if(RxData == 'A'||RxData == 'E')  Kd=Turn_Kd;        
-	 else Kd=0;   //×ªÏòµÄÊ±ºòÈ¡ÏûÍÓÂÝÒÇµÄ¾ÀÕý ÓÐµãÄ£ºýPIDµÄË¼Ïë
-  //===================×ªÏòPD¿ØÖÆÆ÷=================//
-	 turn=Turn_Target*Kp/100+gyro*Kd/100;//½áºÏZÖáÍÓÂÝÒÇ½øÐÐPD¿ØÖÆ
-	 return turn;								 				 //×ªÏò»·PWMÓÒ×ªÎªÕý£¬×ó×ªÎª¸º
+    static PID_Controller_t outer_pid, inner_pid;
+    static uint8_t inited = 0;
+    static float target_yaw = 0;
+    static uint8_t was_turning = 0;
+    float target_rate;
+    float pwm;
+
+    if (!inited) {
+        PID_Init(&outer_pid, TURN_OUTER_KP, 0, 0, TURN_AMPLITUDE, -TURN_AMPLITUDE);
+        PID_Init(&inner_pid, TURN_INNER_KP, TURN_INNER_KI, TURN_INNER_KD, PWM_MAX, -PWM_MAX);
+        inited = 1;
+    }
+
+    if (RxData == CMD_LEFT) {
+        target_rate = TURN_AMPLITUDE;
+        was_turning = 1;
+    } else if (RxData == CMD_RIGHT) {
+        target_rate = -TURN_AMPLITUDE;
+        was_turning = 1;
+    } else {
+        /* æ— è½¬å‘æŒ‡ä»¤ï¼šèˆªå‘é”å®š */
+        if (was_turning) {
+            target_yaw = attitude.Yaw;  /* é‡Šæ”¾æŒ‡ä»¤æ—¶é”å®šå½“å‰èˆªå‘ */
+            was_turning = 0;
+        }
+        /* å¤–çŽ¯ï¼šåèˆªè§’åå·® â†’ ç›®æ ‡è§’é€Ÿåº¦ */
+        target_rate = PID_Compute(&outer_pid, target_yaw, attitude.Yaw);
+    }
+
+    /* å†…çŽ¯ï¼šZ è½´è§’é€Ÿåº¦åå·® â†’ è½¬å‘ PWM */
+    pwm = PID_Compute(&inner_pid, target_rate, gyro);
+    return (int)pwm;
 }
 
-int PWM_Limit(int IN,int max,int min)
+int PWM_Limit(int IN, int max, int min)
 {
-	int OUT = IN;
-	if(OUT>max) OUT = max;
-	if(OUT<min) OUT = min;
-	if(abs((int)Pitch)>=50) OUT = 0;
-	return OUT;
+    int OUT = IN;
+    if (OUT > max) OUT = max;
+    if (OUT < min) OUT = min;
+    if (abs((int)attitude.Pitch) >= FALLDOWN_ANGLE) OUT = 0;
+    return OUT;
 }

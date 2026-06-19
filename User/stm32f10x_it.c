@@ -23,6 +23,11 @@
 
 /* Includes ------------------------------------------------------------------*/
 #include "stm32f10x_it.h"
+#include "stm32f10x.h"
+#include "FreeRTOS.h"
+#include "task.h"
+
+extern TaskHandle_t task1_handler;  /* 控制任务句柄，定义在 main.c */
 
 /** @addtogroup STM32F10x_StdPeriph_Template
   * @{
@@ -153,8 +158,26 @@ void DebugMon_Handler(void)
 }*/
 
 /**
+  * @brief  TIM4 全局中断服务函数，5ms 触发 PID 控制任务
+  */
+void TIM4_IRQHandler(void)
+{
+    BaseType_t xHigherPriorityTaskWoken = pdFALSE;
+
+    if (TIM_GetITStatus(TIM4, TIM_IT_Update) == SET)
+    {
+        /* 清除更新标志位 */
+        TIM_ClearITPendingBit(TIM4, TIM_IT_Update);
+        /* 通过直接任务通知唤醒控制任务 task1 */
+        xTaskNotifyGiveFromISR(task1_handler, &xHigherPriorityTaskWoken);
+        /* 若唤醒的任务优先级高于当前任务，触发上下文切换 */
+        portYIELD_FROM_ISR(xHigherPriorityTaskWoken);
+    }
+}
+
+/**
   * @}
-  */ 
+  */
 
 
 /******************* (C) COPYRIGHT 2011 STMicroelectronics *****END OF FILE****/
