@@ -1,0 +1,38 @@
+# Keil MDK Project Files
+*.uvguix.*
+*.uvoptx
+*.uvprojx.bak
+*.bak
+*.ddk
+*.bak0
+
+# Build Output
+Objects/
+Listings/
+*.axf
+*.elf
+*.hex
+*.bin
+*.lst
+*.lnp
+*.o
+*.d
+*.crf
+
+# Debug Configuration
+DebugConfig/
+
+# Temporary Files
+*.tmp
+*.log
+__vm/
+
+# OS Files
+Thumbs.db
+.DS_Store
+*.swp
+*.swo
+
+# Keil-specific
+.rvdbg
+*.dep
